@@ -107,9 +107,10 @@ export default function BrowserUseSettingsTab() {
       // values without replacing the original, useful failure explanation.
       setIsSettingsLoading(true);
       setIsStatusLoading(true);
-      const [savedSettings] = await Promise.allSettled([loadSettings(version), loadStatus(version)]);
+      const [savedSettings, recoveredStatus] = await Promise.allSettled([loadSettings(version), loadStatus(version)]);
       if (requestVersion.current !== version) return;
       if (savedSettings.status === 'fulfilled') {
+        if (saved && recoveredStatus.status === 'fulfilled') setError(null);
         window.dispatchEvent(new Event('browserUseSettingsChanged'));
       } else {
         setError({ message: `${message} ${t('browserUseSettings.reloadFailed')}` });

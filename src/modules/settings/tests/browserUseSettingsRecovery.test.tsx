@@ -10,6 +10,7 @@ let recoveryFailure: boolean;
 let saveCount: number;
 let settingsReads: number;
 let delayedStatus: Promise<Response> | undefined;
+let statusFailures: number;
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const statusResponse = () => json({ success: true, data: { enabled, available: enabled, playwrightInstalled: true, chromiumInstalled: true, installInProgress: false, message: '' } });
@@ -21,6 +22,7 @@ beforeEach(() => {
   saveCount = 0;
   settingsReads = 0;
   delayedStatus = undefined;
+  statusFailures = 0;
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     if (url.endsWith('/settings') && init.method === 'PUT') {
       ++saveCount;
@@ -35,6 +37,7 @@ beforeEach(() => {
       return json({ success: true, data: { settings: { enabled } } });
     }
     if (url.endsWith('/status')) {
+      if (statusFailures > 0) { --statusFailures; throw new Error('offline'); }
       if (delayedStatus) { const response = delayedStatus; delayedStatus = undefined; return response; }
       return statusResponse();
     }
@@ -45,6 +48,17 @@ afterEach(() => vi.unstubAllGlobals());
 
 const toggle = () => screen.getByRole('switch', { name: 'Enable Browser' }) as HTMLButtonElement;
 const ready = async () => { await waitFor(() => expect(toggle().disabled).toBe(false)); };
+
+it.each([1, 2])('clears a status alert only after successful recovery (%i failures)', async failures => {
+  render(<BrowserUseSettingsTab />);
+  await ready();
+  statusFailures = failures;
+  fireEvent.click(toggle());
+  await ready();
+  expect(toggle().getAttribute('aria-checked')).toBe('true');
+  if (failures === 1) expect(screen.queryByRole('alert')).toBeNull();
+  else expect(screen.getByRole('alert').textContent).toContain('Failed to load Browser status');
+});
 
 it('saves successfully and notifies other browser consumers', async () => {
   const changed = vi.fn();

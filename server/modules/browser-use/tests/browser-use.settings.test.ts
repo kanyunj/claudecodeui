@@ -8,6 +8,7 @@ import express from 'express';
 import router from '@/modules/browser-use/browser-use.routes.js';
 import { BrowserSettingsApplyError, browserUseService } from '@/modules/browser-use/browser-use.service.js';
 import { appConfigDb } from '@/modules/database/index.js';
+import { providerMcpService } from '@/modules/providers/index.js';
 
 test('failed registration preserves the saved setting and reports a safe retryable failure', async (t) => {
   let stored = JSON.stringify({ enabled: false });
@@ -40,6 +41,37 @@ test('an explicit disable retries cleanup even if the previous failure already s
   cleanup.mock.mockImplementation(async () => ({ name: 'test-browser', results: [] }));
   assert.deepEqual(await browserUseService.updateSettings({ enabled: false }), { enabled: false });
   assert.equal(cleanup.mock.callCount(), 2);
+  assert.equal(stop.mock.callCount(), 2);
+});
+
+for (const operation of ['register', 'legacy removal', 'unregister'] as const) {
+  test(`resolved ${operation} errors produce a safe retryable failure`, async (t) => {
+    t.mock.method(appConfigDb, 'get', () => JSON.stringify({ enabled: false }));
+    t.mock.method(appConfigDb, 'set', () => undefined);
+    t.mock.method(providerMcpService, 'addMcpServerToAllProviders', async () => [
+      { provider: 'claude', created: operation !== 'register', ...(operation === 'register' ? { error: 'DO_NOT_EXPOSE' } : {}) },
+    ]);
+    t.mock.method(providerMcpService, 'removeMcpServerFromAllProviders', async () => [
+      { provider: 'claude', removed: false, ...(operation !== 'register' ? { error: 'DO_NOT_EXPOSE' } : {}) },
+    ]);
+    const stop = t.mock.method(browserUseService, 'stopAllSessions', async () => undefined);
+    await assert.rejects(browserUseService.updateSettings({ enabled: operation !== 'unregister' }), (error: unknown) => {
+      assert(error instanceof BrowserSettingsApplyError);
+      assert(!error.message.includes('DO_NOT_EXPOSE'));
+      return true;
+    });
+    assert.equal(stop.mock.callCount(), operation === 'unregister' ? 1 : 0);
+  });
+}
+
+test('already absent provider servers are a successful disable', async (t) => {
+  t.mock.method(appConfigDb, 'get', () => JSON.stringify({ enabled: false }));
+  t.mock.method(appConfigDb, 'set', () => undefined);
+  t.mock.method(providerMcpService, 'removeMcpServerFromAllProviders', async () => [
+    { provider: 'claude', removed: false },
+  ]);
+  const stop = t.mock.method(browserUseService, 'stopAllSessions', async () => undefined);
+  assert.deepEqual(await browserUseService.updateSettings({ enabled: false }), { enabled: false });
   assert.equal(stop.mock.callCount(), 1);
 });
 

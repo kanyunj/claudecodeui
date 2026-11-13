@@ -503,8 +503,12 @@ export const browserUseService = {
         await this.registerAgentMcp();
       } else if (current.enabled || settings.enabled === false) {
         // An explicit disable also retries cleanup after a previous partial failure.
-        await this.unregisterAgentMcp();
-        await this.stopAllSessions();
+        try {
+          await this.unregisterAgentMcp();
+        } finally {
+          // Disabling Browser must stop live sessions even if provider cleanup fails.
+          await this.stopAllSessions();
+        }
       }
     } catch {
       // Provider failures can include commands, environment values and tokens.
@@ -534,7 +538,9 @@ export const browserUseService = {
 
   async registerAgentMcp() {
     const { command, args } = getMcpCommand();
-    await Promise.all(LEGACY_MCP_SERVER_NAMES.map((name) => removeMcpServerFromAllProviders(name)));
+    const legacyResults = (await Promise.all(
+      LEGACY_MCP_SERVER_NAMES.map((name) => removeMcpServerFromAllProviders(name)),
+    )).flat();
     const results = await providerMcpService.addMcpServerToAllProviders({
       name: MCP_SERVER_NAME,
       scope: 'user',
@@ -546,6 +552,10 @@ export const browserUseService = {
         CLOUDCLI_BROWSER_USE_API_URL: getMcpApiUrl(),
       },
     });
+    if (legacyResults.some((result) => result.error !== undefined)
+      || results.some((result) => !result.created)) {
+      throw new BrowserSettingsApplyError();
+    }
     return { name: MCP_SERVER_NAME, command, args, results };
   },
 
@@ -557,6 +567,10 @@ export const browserUseService = {
     const results = (await Promise.all(
       [MCP_SERVER_NAME, ...LEGACY_MCP_SERVER_NAMES].map((name) => removeMcpServerFromAllProviders(name)),
     )).flat();
+    // removed=false without an error means the server was already absent.
+    if (results.some((result) => result.error !== undefined)) {
+      throw new BrowserSettingsApplyError();
+    }
     return { name: MCP_SERVER_NAME, results };
   },
 
